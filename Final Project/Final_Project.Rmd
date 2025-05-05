@@ -1,0 +1,470 @@
+---
+title: "Is the MLB Entering an Era of Speed Over Power?"
+subtitle: "The Effects of Stolen Bases and Triples on Win Probability"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float:
+      collapesed: true
+---
+
+![Source: Fox News](https://a57.foxnews.com/static.foxnews.com/foxnews.com/content/uploads/2023/07/1200/675/Jarren-Duran-Boston-Red-Sox.jpg?ve=1&tl=1)
+
+## Introduction
+
+If you've tuned into Boston Sports and its media recently, you're bound to hear about the up-and-coming super-athlete Jarren Duran.
+
+Duran is a twenty-eight-year-old outfielder who changed his reputation from being a streaky hitter and below-average defender to an All-Star MVP and one of the fastest runners in the league. Turn on any Red Sox broadcast or podcast and you'll hear the phrase "Jarren Duran makes the defense nervous." His sprint speed turns routine singles into doubles and doubles into triples. His presence on the base paths causes elite MLB infielders to look like they're holding a baseball for the first time. Duran has managed to use his speed to earn a spot as the first batter in the Red Sox lineup, and he doesn't seem to be cooling off any time soon.
+
+Now, Duran isn't the only star in the MLB relying on speed to make himself known. Ronald Acuña Jr. stole 73 bases in 2024, making him the first-ever player to steal 70+ bases and hit 40+ home runs in a single season. Bobby Whitt Jr. had the top sprint speed of 30.5 mph in 2024 while also being in the 93rd percentile for Batting Run Value according to Baseball Reference. Elly De La Cruz stole 67 bases in his second year in the MLB by running 90 ft in as quick as 3.72 seconds. It seems like players are getting faster and faster, so my question is, how much of an impact are these guys making on the game? Do they really have the ability to get in the heads of opposing teams and sway the outcome of the game more than we think? 
+
+
+<br /> 
+
+|Source: CNN.com|Source: The New York Times|
+|:-:|:-:|
+|![Source: CNN.com](https://media.cnn.com/api/v1/images/stellar/prod/230928155338-15-week-in-photos-0928.jpg?q=w_1160,c_fill)|![Source: The New York Times](https://static01.nyt.com/athletic/uploads/wp/2023/07/03104118/USATSI_20944497-1024x683.jpg?width=1248&quality=70&auto=webp)|
+
+<br />
+
+
+In order to test my research questions, I decided to inspect some play-by-play data from the 2024 season and fit a predictive model to see if there is a correlation between two important speed-related statistics and win. The stats I will be focusing on are stolen bases and triples. I am also going to be specifically looking at the first inning of a game to see if the occurrence of either of these plays at the start of the game has any significant influence on the outcome. Is a team more likely to win if there is a stolen base or a triple in the first inning? This will help tell us if fast baserunners really do make the other teams "nervous."
+
+The goal of this analysis is to not only classify and predict games based on stolen bases and triples, but the findings of this data could indicate much more. If faster players really are as impactful as it seems, we may be--or should be--seeing a shift in the MLB away from your typical power hitters towards players with higher run speeds, more baserunning skills, and an overall ability to put pressure on pitchers and infielders. This study could also hint at whether or not teams should be more aggressive in terms of their speed during games to increase their probability of winning a game. Let's take a look at some data to see what speed means for the MLB.
+<br />
+
+## Gathering Data
+
+### Retrosheet
+
+The data I will be using for this study is from a website called Retrosheet. Retrosheet is a collection of play-by-play and game data for various professional baseball leagues, including the MLB, dating back to as early as the 1800s. You can learn more about Retrosheet here: https://www.retrosheet.org/.
+
+To work with this data in R, I downloaded the Retrosheet R package which contains various functions which allow me to scrape play-by-play and game data from the Retrosheet website directly into R as workable data frames. You can learn about and download the package here: https://cran.r-project.org/web/packages/retrosheet/index.html 
+
+```{r, eval = FALSE}
+install.packages("Retrosheet")
+library(retrosheet)
+```
+
+```{r, include = FALSE}
+library(retrosheet)
+library(tidyverse)
+library(openintro)
+library(caret)
+library(pROC)
+library(rpart)
+library(rpart.plot)
+library(Metrics)
+```
+<br />
+
+### Obtaining Play-by-Play Data
+
+The first step in gathering my data is using a function called get_my_retrosheet. This function was created by Jim Albert, a Mathematics and Statistics professor at Bowling Green State University, which uses the functions in the Retrosheet packages to return a dataset of play-by-play data for every team from a specified year.
+
+Albert's GitHub and the get_my_retrosheet function can be found here: https://gist.github.com/bayesball/e7d56e5edf31d7a71c6bf40cc1dfe743 
+https:/. An article where he explains and uses the functions can be found here: https://baseballwithr.wordpress.com/2024/03/27/retrosheet-package-and-comparing-count-rates/.
+```{r}
+get_my_retrosheet <- function(season){
+  t <- get_retrosheet("roster", season)
+  teams <- names(t)
+  one_team_retrieve <- function(team){
+    d <- get_retrosheet("play", season, team)
+    one_game <- function(j){
+      dj <- d[[j]]
+      game_id <- unlist(dj$id)[1]
+      dj$play |>
+        mutate(GAMEID = game_id,
+             count = as.character(count))
+    }
+    NG <- length(d)
+    map(1:NG, one_game) |>
+      list_rbind()
+  }
+  teams |>
+    map(one_team_retrieve) |>
+    list_rbind() -> DD
+}
+```
+<br />
+
+For my research, I wanted to focus on data from a recent year where players like Jarren Duran and Elly De La Cruz have been active. I chose the 2024 season, and used the scraping function to get a data table of all play-by-play data from that year.
+```{r, eval = FALSE}
+play_data <- get_my_retrosheet(2024)
+```
+
+```{r, include = FALSE}
+play_data <- read_csv("play_data.csv")
+```
+
+```{r, echo = FALSE}
+play_data
+```
+<br />
+
+### Wrangling
+
+As you can see, the data set we get is incredibly large with over 200,000 plays. To start wrangling this data into something more workable, I filtered it to include only plays from the first inning.
+```{r}
+first_play_data <- play_data |>
+  filter(inning == 1)
+```
+
+```{r, echo = FALSE}
+first_play_data
+```
+<br />
+
+
+Next, I needed to determine which plays were stolen bases or triples. I created a new column for each variable and used an if else statement to detect if a play contained either of the notation for stolen bases, SB, or triples, T. If SB or T was detected, meaning that that play occurred, the value is set to 1. If not, it is set to 0.
+```{r}
+variable_play_data <- first_play_data |> 
+  mutate(
+    SB = ifelse(str_detect(play, "SB"), 1, 0),
+    T = ifelse(str_sub(play, start = 1, end = 1) == "T", 1, 0)
+         ) |> 
+  select(team, play, GAMEID, SB, T)
+```
+
+```{r, echo = FALSE}
+variable_play_data
+```
+<br />
+
+Once the columns for stolen bases and triples were created, I grouped my data by game (GAMEID) and team. This creates a group containing all of the plays in every game of the season for *both* teams involved in the game. From there, I summarized my data so that every row represents one game played by one team and contains the amount of stolen bases and triples that occurred in the first inning.
+```{r}
+final_play_data <- variable_play_data|> 
+  group_by(GAMEID, team) |> 
+  summarize(
+    SB = sum(SB),
+    T = sum(T))
+```
+
+```{r, echo = FALSE}
+final_play_data
+```
+<br />
+
+### Obtaining Game Data
+
+An integral part of this analysis is determining whether teams win or lose. Unfortunately, the Retrosheet play-by-play data does not include this information. In order to track wins and losses, I will be using the game data in Retrosheet, which tells us the runs scored by the home and visiting teams for each game. Below, I used the function get_retrosheet to scrape all game data from the 2024 season.
+```{r}
+win_data <- get_retrosheet("game", 2024)
+```
+
+```{r, echo = FALSE}
+win_data
+```
+<br />
+
+One thing that this data lacks, however, is the GAMEID variable, which is the variable used in our play-by-play data to identify each game. I used some string manipulation to recreate the GAMEID variable in this dataset based on the date of the game. This is useful for joining the datasets later on.
+```{r}
+wide_win_data <- win_data |> 
+  mutate(
+    Year = str_sub(Date, start = 1, end = 4),
+    Month = str_sub(Date, start = 6, end = 7),
+    Day = str_sub(Date, start = 9, end = 10),
+    GAMEID = str_c(HmTm, Year, Month, Day, DblHdr, sep = "")) |> 
+  relocate(GAMEID)
+```
+
+```{r, echo = FALSE}
+wide_win_data
+```
+<br />
+
+Now, I want to find a way to track whether or not a team won a given game. First, I pivoted my data so that there are two rows for each game: one for the visiting team and one for the home team. Then, I created the column "Win" which assigns a W to the winning team and an L to the losing team using ifelse statements.
+```{r}
+long_win_data <- wide_win_data |> 
+  pivot_longer(
+    cols = c(VisTm, HmTm),
+    names_to = "TmType",
+    values_to = "Team"
+    )|> 
+  select(GAMEID, Team, TmType, HmRuns, VisRuns) |> 
+  mutate( Win = ifelse(TmType == "VisTm" & VisRuns > HmRuns, "W",
+                       ifelse(TmType == "HmTm" & HmRuns > VisRuns, "W", "L")))  
+```
+
+```{r, echo = FALSE}
+long_win_data
+```
+<br />
+
+The last step in manipulating the game data is assigning 0 to the visiting team and 1 to the home team. This will allow us to match this table with our play-by-play table.
+```{r}
+final_win_data <- long_win_data |> 
+  mutate(TmType = ifelse(TmType == "VisTm", 0,1)) |> 
+  select(GAMEID,TmType,Win)
+```
+
+```{r, echo = FALSE}
+final_win_data
+```
+<br />
+
+### My Final Dataset
+
+Lastly, I will use a joining function to merge the play-by-play and game data into one data frame. I used the GAMEID and team columns as keys to identify which observations are which. We are now left with a dataset containing one observation for every first inning played by every team in the MLB in 2024 with total stolen bases, triples, and win status tracked.
+```{r}
+final_data <-left_join(final_play_data, final_win_data,
+                       by = c("team" = "TmType", "GAMEID" = "GAMEID"))
+```
+
+```{r, echo = FALSE}
+final_data
+```
+
+```{r, echo = FALSE}
+final_data <- as_tibble(final_data)
+```
+<br />
+
+## Visualization
+
+Before starting any statistical modeling, I am going to take a closer look at our variables and their relationship to wins in the form of ggplot visualization. This can hint at whether or not my variables have any predictive significance and if there is any reason to continue with my exploration.
+
+The first plot I chose to make is a stacked bar plot which sorts the first innings by the total number of stolen bases and then sorts them based on win and loss. There are two important things to note about this graph. First, it's very difficult to see the difference between wins and losses for games with 1 or more stolen bases because there are so few observations for each level. Second, the reason this visualization doesn't work very well is because the data is so skewed. This isn't a bad thing, but it just means that a large majority of games do not have a stolen base in the first inning, so the difference between counts for 0 SB and 1+ SB is very large. This makes sense when you think about typical baseball games.
+```{r, warning = FALSE, message = FALSE}
+final_data |>
+  group_by(SB) |> 
+  summarize(
+    FreqSB = n(), 
+    Win
+    ) |> 
+  ggplot(aes(x = SB, y = FreqSB , fill = Win)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = FreqSB), vjust = 0) +
+  labs(
+    title = "Number of Wins Based on Stolen Bases in the First",
+    x = "# of Stolen Bases",
+    y = "Number of Wins"
+  ) +
+  scale_fill_manual(values = alpha(c("springgreen4", "indianred3"))) 
+```
+<br />
+<br />
+
+To work around this skew, I created a filled bar graph to show the proportion of games that were wins versus losses for each level of total stolen bases. This plot much more clearly depicts a positive relationship between stolen bases and the probability of winning. Of course, there were only two games in 2024 with three stolen bases, so the one-hundred percent win rate is very likely to be due to chance, which is why it's important to look at graphs depicting both count and proportion. Based on this graph, I found it worthwhile to continue with my analysis, because it looks like the relationship between stolen bases and wins could be strong.
+```{r, warning = FALSE, message = FALSE}
+final_data |> 
+  ggplot(aes(x = SB, fill = Win)) +
+  geom_bar(position = "fill") +
+  labs(
+    title = "Proportion of Wins Based on Stolen Bases in the First",
+    x = "# of Stolen Bases",
+    y = "Proportion of Wins"
+  ) +
+  scale_fill_manual(values = alpha(c("springgreen4", "indianred3")))
+```
+<br />
+<br />
+
+Next, I created the same two bar plots using triples as the explanatory variable. You can see that triples in the first inning are even less common than stolen bases, so we run into the same skew and visibility issues.
+
+```{r, warning = FALSE, message = FALSE}
+final_data |> 
+  group_by(T) |> 
+  summarize(
+    FreqT = n(), 
+    Win) |> 
+  ggplot(aes(x = T, y = FreqT , fill = Win)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = FreqT), vjust = 0) +
+  labs(
+    title = "Number of Games Won Based on Triples in the First",
+    x = "# of Triples",
+    y = "# of Wins"
+  ) +
+  scale_fill_manual(values = alpha(c("springgreen4", "indianred3")))
+```
+<br />
+<br />
+
+The filled bar plot shows that the proportion of games won with one triple in the first inning is higher than games without a triple, however, there is a somewhat unexpected result for games with two triples. This plot shows that one hundred percent of games with two triples lost, but when we examine the counts, there was only one game in 2024 where a team got a triple in the first inning.
+```{r, warning = FALSE, message = FALSE}
+final_data |> 
+  ggplot(aes(x = T, fill = Win)) +
+  geom_bar(position = "fill") +
+  labs(
+    title = "Proportion of Wins Based on Triples in the First",
+    x = "# of Triples",
+    y = "Proportion of Wins"
+  ) +
+  scale_fill_manual(values = alpha(c("springgreen4", "indianred3")))
+  
+```
+<br />
+<br />
+
+Visualization can indicate if there is a correlation between the variable and the outcome we are looking at. Based on the bar graphs, it seems like there could be a relationship between stolen bases and triples in the first inning with wins. Despite the two triple losses, the difference between the win rate for 0 triples in the first inning and 1 triple in the first inning is notable and worth looking into.
+<br />
+
+## Modeling
+Now that the exploratory data analysis is complete, I am going to build a model to try and determine whether we can predict the outcome of a game based on stolen bases and triples in the first inning or not.
+<br />
+
+### Logistic Regression
+The model I decided to create is a logistic regression model, which predicts a classifier based on one or more explanatory variables and their relationship to one another. In this case, we are predicting wins, W or L, based on the quantitative variables, SB and T.
+<br />
+
+Before I build my model, a quick housecleaning step is turning the classifier variable (Win), into a factor so it cooperates with the modeling functions. A classifier is a variable that tells us when something happens (1) or it doesn't (0). Because I want to predict wins, I will consider "W" as something happening. In terms of code, this is done below by setting "L" as the factor level 0 and "W" as level 1.
+```{r}
+final_data <- final_data |> 
+  mutate(
+    Win = fct(Win, c("L", "W"))
+    )
+```
+
+```{r, echo = FALSE}
+final_data
+```
+<br />
+
+To fit a model, it is important to split the data into training and test sets. This helps us test the predictive power of our model and avoid overfitting which is a form of statistical bias. Here, I put eighty percent of my data into the training set and twenty percent into the test set. I will use the training set to build my model and then later evaluate it on the test data. I also set the seed so that my code can be reproduced with the same data allocation and therefore the same model outcome.
+```{r}
+set.seed(431)
+
+train_index <- as.vector(createDataPartition(final_data$Win, p = 0.8, list = FALSE))
+
+data_train <- slice(final_data, train_index)
+data_test <- slice(final_data, -train_index)
+```
+<br />
+
+Now, the easiest part is actually fitting the model itself. I use the generalized linear l function to create a logistic regression model that predicts Win based on SB, T, and the interaction between the two variables (SB:T), based *only* on the training data. A summary of my model is printed below.
+```{r}
+fit <- glm(Win ~ SB + T + SB:T , data = data_train, family = "binomial")
+
+summary(fit)
+```
+The model returns the formula: Win = 0.217(SB) + 0.239(T) + 1.768(SB:T) - 0.026.
+
+Essentialy, the model tells us that an increase in stolen bases or triples in the first inning will increase the probability of winning. Any value of stolen bases or triples can be plugged into the model, and it will return the predicted probability of the game being won. Now the question is how accurate this model actually is.
+
+One thing worth noting here is the p-values of my variables. If we use a level of significance of .05, only stolen bases is under that level of significance, allowing us to reject the null hypothesis which states that stolen bases in the first inning do not lead to an increased probability of winning. Triples is not under the same level of significance, so we cannot reject the same null hypothesis. I will explain how this relates to my research questions later on.
+<br />
+
+### Evaluating Model Performance
+
+Before we start coming to conclusions based on the logistic model, it is important to check the accuracy. To do this, I will be inputting the train and test data into the model to see what outcomes it would predict for the games. From there we can compare that to the actual outcomes to see how the model performed. Below, I used the model to predict the probability of Win numerically as well as categorically using a threshold level of .5.
+```{r}
+threshold <- .5
+predicted_prob_train = predict(fit, data_train, type = "response")
+predicted_class_train = as.factor(if_else(predicted_prob_train > threshold, "W", "L"))
+
+predicted_prob_test = predict(fit, data_test, type = "response")
+predicted_class_test = as.factor(if_else(predicted_prob_test > threshold, "W", "L"))
+```
+<br />
+
+
+### F1 Score
+
+I am going to quantitatively asses the accuracy of my model by using the F1 score, which will tell us how much better our model is at predicting wins than a random model. Many different types of statistics can tell you the same thing, but the F1 score works best on data that is skewed like mine.
+
+I found this score by creating confusion matricies for my train and test data. The matrix compares the actual win status of games in 2024 to that predicted by my model. It the sorts them into four groups: wins that were preicted to be wins, losses that were predicted to be losses, wins that were predicted to be losses, and losses that were predicted to be wins. The formula for the F1 score uses these values to determine accuracy.
+```{r}
+confision_matrix_train <- confusionMatrix(
+  predicted_class_train,
+  reference = data_train$Win,
+  mode = "everything",
+  positive = "W"
+)
+
+confision_matrix_test <- confusionMatrix(
+  data = predicted_class_test,
+  reference = data_test$Win,
+  mode = "everything",
+  positive = "W"
+)
+```
+
+The F1 score for the training data is 0.177 and 0.2 for the test data.
+```{r}
+confision_matrix_train$byClass["F1"]
+confision_matrix_test$byClass["F1"]
+```
+The F1 score is a value between 0 and 1 with 1 being perfectly accurate and 0 being just as good as random. Based on the low F1 scores for both of my datasets, we can see that my model isn't that much better at predicting wins than a random model. I will talk more about what we can gather from this later.
+<br />
+
+
+### Cross Validation
+
+A good thing about analyzing MLB data is that there is so much of it available to model and test off of. Even though I found the F1 scores of the data from 2024, I thought it would be interesting to see how the model holds up against data from another year. I decided to compare it to data from 2023 to mitigate as many league-wide differences as possible to see if the model's accuracy changes significantly by year. Below, I imported a data table of the same format as my 2024 data including stolen bases and triples in the first inning.
+```{r, message = FALSE}
+final_data_2023 <- read_csv("final_data_2023.csv")
+```
+
+```{r, echo = FALSE}
+final_data_2023 <- final_data_2023 |> 
+  mutate(
+    Win = fct(Win, c("L", "W"))
+  ) 
+```
+<br />
+
+Now, to evaluate the 2023 data, I repeat the same splitting and predicting steps as before.
+```{r}
+set.seed(432)
+
+train_index23 <- as.vector(createDataPartition(final_data_2023$Win, p = 0.8, list = FALSE))
+
+
+data_train23 <- slice(final_data_2023, train_index23)
+data_test23 <- slice(final_data_2023, -train_index23)
+
+
+predicted_prob_train23 = predict(fit, data_train23, type = "response")
+predicted_class_train23 = as.factor(if_else(predicted_prob_train23 > threshold, "W", "L"))
+
+predicted_prob_test23 = predict(fit, data_test23, type = "response")
+predicted_class_test23 = as.factor(if_else(predicted_prob_test23 > threshold, "W", "L"))
+```
+<br />
+
+I also use the same confusion matrix format to compare the 2023 train and test data to the predicted outcomes for games in 2023 based on the logistic regression model.
+```{r}
+confision_matrix_train23 <- confusionMatrix(
+  predicted_class_train23,
+  reference = data_train23$Win,
+  mode = "everything",
+  positive = "W"
+)
+
+confision_matrix_test23 <- confusionMatrix(
+  data = predicted_class_test23,
+  reference = data_test23$Win,
+  mode = "everything",
+  positive = "W"
+)
+```
+<br />
+
+Finally, we have the F1 scores for the 2023 data. The training data had an F1 score of 0.171 and the testing data had a score of 0.161. Compared to the 2024 data, the model performed roughly the same on the training data and slightly worse on the testing data. Again, the logistic model doesn't predict much better than random chance.
+```{r}
+confision_matrix_train23$byClass["F1"]
+confision_matrix_test23$byClass["F1"]
+```
+<br />
+
+
+## Conclusion
+
+Now that all of this analysis is done, how do the findings relate to whether or not stolen bases in the first inning increase win probability?
+
+If we start at the beginning with the visualization, the bar plots show what seems to be a higher likelihood of winning when stolen bases or triples are high. Based, on the weighted proportion, the graphs do show an increase in wins for incremental increases in our two variables. This was just a preliminary exploration, however, and can't help us predict wins.
+
+Next up was the logistic regression model. The model agreed with the visualization, as expected, and increased the probability of the outcome of a game being a win for increases in stolen bases and triples in the first inning. This model gives us predictions, but we dont know how accurate they are yet. I also noted how the p-values differed for each variable. There appeared to be a significant relationship between stolen bases in the first inning and win probability but not between triples in the first inning and win probability.
+
+Lastly, I computed the F1 score of our test and training sets for both 2024 and 2023. The scores told us that the model is not much better at predicting wins than a random model, and only improved our prediction by around 17%.
+
+Overall, I don't think this model is a very good way to predict wins. It does not improve a random model enough for me to say that we can use it to predict the outcome of games in the future with any kind of certainty. Any improvement from random is better than nothing, especially in the game of baseball where the average team wins only 50% of the time, but I do think its worth finding a more accurate model, whether that's by using a different method or different predictor variables.
+
+I do think, however, that the p-value for stolen bases in the first is worth talking about in terms of further research. The model told us that stolen bases could be a good predictor of wins and that increasing stolen bases in the first does lead to an increase in win probability. To test that further, I could make a model where the only predictor is stolen bases and perform the same validation methods to see how much better that model is than random. I could also try other models like a random forest or even add other variables to my model like max sprint speed, doubles, opposing team infield errors, and more. I would also be interested in looking at these variables over all innings of a game or over different specified innings to see if there is any point in which speed stats have the greatest impact.
+
+And of course, the reason I began this analysis was to see the implications my findings may have on the MLB. Based on the significance test, I do think that there is reason to suggest increasing stolen bases in the first inning in order to increase wins. Teams may benefit from rearranging their lineups so that their best base stealers appear at the top of the lineup. It could make sense for coaching staves to emphasize being more aggressive on the basepaths in the first inning. Fast baserunners might even be more of a priority for teams who lack speed and the ability to steal bases when the trade deadline approaches.
+
+I don't have enough evidence to say whether or not speed players have more of an impact than power hitters, and I'm definitely not suggesting the Yankees trade Aaron Judge for someone who can steal more than 10 bags a year, but I can say that stolen bases are an integral part of the game, and finding a balance between power and speed, preferably a combination of both, could do great things for a baseball team.
+
